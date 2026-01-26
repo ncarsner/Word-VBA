@@ -1,0 +1,78 @@
+Option Explicit
+
+Private Const PROP_NAME As String = "LEGAL_TEXT_DICTIONARY"
+
+Public Sub ValidateAndImport_TSV()
+    Dim path As String
+    path = Application.InputBox("Select TSV dictionary file:", _
+                                "Import Dictionary", Type:=2)
+    If path = "False" Or Trim$(path) = "" Then Exit Sub
+
+    Dim raw As String
+    raw = ReadAllText(path)
+    If Len(raw) = 0 Then
+        MsgBox "File is empty or unreadable.", vbCritical
+        Exit Sub
+    End If
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+
+    Dim lines() As String, i As Long
+    lines = Split(raw, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        Dim line As String
+        line = Trim$(lines(i))
+        If line <> "" Then
+            If InStr(line, vbTab) = 0 Then
+                Fail "Missing TAB on line " & (i + 1)
+            End If
+
+            Dim parts() As String
+            parts = Split(line, vbTab)
+            If UBound(parts) <> 1 Then
+                Fail "Too many TABs on line " & (i + 1)
+            End If
+
+            If Left$(parts(0), 4) <> "TCA|" Then
+                Fail "Invalid key prefix on line " & (i + 1)
+            End If
+
+            If Trim$(parts(1)) = "" Then
+                Fail "Empty VALUE on line " & (i + 1)
+            End If
+
+            If dict.Exists(parts(0)) Then
+                Fail "Duplicate key: " & parts(0)
+            End If
+
+            dict.Add parts(0), parts(1)
+        End If
+    Next i
+
+    SetDocProperty PROP_NAME, raw
+    MsgBox "Dictionary imported successfully.", vbInformation
+End Sub
+
+Private Sub Fail(msg As String)
+    MsgBox "Import failed:" & vbCrLf & msg, vbCritical
+    Err.Raise vbObjectError + 1
+End Sub
+
+Private Function ReadAllText(path As String) As String
+    Dim f As Integer
+    f = FreeFile
+    Open path For Input As #f
+    ReadAllText = Input$(LOF(f), #f)
+    Close #f
+End Function
+
+Private Sub SetDocProperty(name As String, value As String)
+    On Error GoTo AddNew
+    ActiveDocument.CustomDocumentProperties(name).Value = value
+    Exit Sub
+AddNew:
+    ActiveDocument.CustomDocumentProperties.Add _
+        name, False, msoPropertyTypeString, value
+End Sub
