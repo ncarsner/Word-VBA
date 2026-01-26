@@ -4,11 +4,11 @@ Original or adapted VBA scripts for Microsoft Word.
 
 TCA Dictionary checklist
 - Before using the file:
-[ ] Every non-blank line contains exactly one TAB
-[ ] No trailing spaces in keys
-[ ] No duplicate keys
-[ ] Placeholders are bracketed ([...])
-[ ] Encoding is UTF-8 (Excel default is fine)
+- [ ] Every non-blank line contains exactly one TAB
+- [ ] No trailing spaces in keys
+- [ ] No duplicate keys
+- [ ] Placeholders are bracketed ([...])
+- [ ] Encoding is UTF-8 (Excel default is fine)
 
 - Recommended workflow:
 1. Maintain TCA_dictionary.xlsx as the authoritative file
