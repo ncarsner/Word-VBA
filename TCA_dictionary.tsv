@@ -12,3 +12,18 @@ TCA|T=16|C=3	Supreme Court
 TCA|T=16|C=3|P=1	Organization and Powers
 TCA|T=16|C=3|P=2	Procedural Authority
 TCA|T=16|C=3|P=3	Terms
+
+' EXPECTED STRUCTURE: Each non-blank line must look like this:
+' <KEY><TAB><VALUE>
+
+' Key design:
+' TCA|T=<Title>|C=<Chapter>|P=<Part>|S=<Section>
+
+' Omit levels that do not apply.
+' Do not reorder components.
+' Do not renumber keys later.
+
+' Use standardized placeholders:
+' [RESERVED – PART NOT YET CODIFIED]
+' [REPEALED]
+' [INTENTIONALLY LEFT BLANK]
