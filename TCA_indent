@@ -1,0 +1,307 @@
+Option Explicit
+
+'========================
+' USER-ADJUSTABLE OPTIONS
+'========================
+Private Const INDENT_STEP_POINTS As Single = 18          ' 18 pt = 0.25"
+Private Const DEFAULT_HANG_POINTS As Single = 18         ' hanging amount when enabled (commonly same as INDENT_STEP_POINTS)
+
+' Entry point #1: runs with default settings; prompts for hanging indent on/off
+Public Sub IndentAnnotatedLegalBlocks()
+    ' Prevent execution if Track Changes is active
+    If TrackChangesIsActive() Then
+        MsgBox "Macro cancelled: Track Changes is currently ON. Turn off Track Changes and re-run.", _
+               vbExclamation, "Legal Indentation"
+        Exit Sub
+    End If
+
+    Dim enableHanging As VbMsgBoxResult
+    enableHanging = MsgBox("Enable hanging indent?", vbYesNoCancel + vbQuestion, "Legal Indentation")
+    If enableHanging = vbCancel Then Exit Sub
+
+    IndentAnnotatedLegalBlocks_WithOptions (enableHanging = vbYes), DEFAULT_HANG_POINTS
+End Sub
+
+' Entry point #2: run without prompts (call from another macro/button)
+Public Sub IndentAnnotatedLegalBlocks_WithOptions(ByVal useHangingIndent As Boolean, _
+                                                  Optional ByVal hangingPoints As Single = DEFAULT_HANG_POINTS)
+    ' Prevent execution if Track Changes is active
+    If TrackChangesIsActive() Then
+        MsgBox "Macro cancelled: Track Changes is currently ON. Turn off Track Changes and re-run.", _
+               vbExclamation, "Legal Indentation"
+        Exit Sub
+    End If
+
+    Dim rng As Range
+    If Selection Is Nothing Then Exit Sub
+
+    If Selection.Range.Start <> Selection.Range.End Then
+        Set rng = Selection.Range
+    Else
+        Set rng = ActiveDocument.Content
+    End If
+
+    ApplyLegalIndentation rng, INDENT_STEP_POINTS, useHangingIndent, hangingPoints
+End Sub
+
+'========================
+' CORE LOGIC
+'========================
+Private Sub ApplyLegalIndentation(ByVal scopeRng As Range, _
+                                  ByVal indentStep As Single, _
+                                  ByVal useHangingIndent As Boolean, _
+                                  ByVal hangingPoints As Single)
+
+    Dim paras As Paragraphs
+    Set paras = scopeRng.Paragraphs
+
+    Dim i As Long
+    i = 1
+
+    ' Tracks current nesting level index (0-based). Indent = levelIdx * indentStep.
+    Dim levelIdx As Integer
+    levelIdx = 0
+
+    Do While i <= paras.Count
+        Dim p As Paragraph
+        Set p = paras(i)
+
+        Dim txt As String, trimmedTxt As String
+        txt = StripParaEndings(p.Range.Text)
+        trimmedTxt = LTrim$(txt)
+
+        ' IGNORE: if it does not begin with a parenthesized indicator, do nothing.
+        Dim marker As String
+        marker = GetLeadingParenMarker(trimmedTxt)
+        If Len(marker) = 0 Then
+            i = i + 1
+            GoTo ContinueLoop
+        End If
+
+        Dim kind As String
+        kind = MarkerKind(marker)
+        If Len(kind) = 0 Then
+            i = i + 1
+            GoTo ContinueLoop
+        End If
+
+        ' If a top-level "(a)" is alone on its line and the NEXT line begins with "(1)",
+        ' merge them: "(a)<TAB>(1) ..." where the TAB aligns to one indent measure.
+        If IsMarkerOnlyLine(trimmedTxt, marker) Then
+            If i < paras.Count Then
+                Dim nextP As Paragraph
+                Set nextP = paras(i + 1)
+
+                Dim nextTxt As String, nextTrimmed As String
+                nextTxt = StripParaEndings(nextP.Range.Text)
+                nextTrimmed = LTrim$(nextTxt)
+
+                Dim nextMarker As String
+                nextMarker = GetLeadingParenMarker(nextTrimmed)
+
+                If Len(nextMarker) > 0 Then
+                    Dim nextKind As String
+                    nextKind = MarkerKind(nextMarker)
+
+                    If kind = "lower" And nextKind = "num" Then
+                        MergeMarkerWithNextLine p, nextP, indentStep
+
+                        ' Refresh paragraphs collection after delete
+                        Set paras = scopeRng.Paragraphs
+
+                        ' Re-read current paragraph after merge
+                        txt = StripParaEndings(p.Range.Text)
+                        trimmedTxt = LTrim$(txt)
+                        marker = GetLeadingParenMarker(trimmedTxt)
+                        kind = MarkerKind(marker)
+                    End If
+                End If
+            End If
+        End If
+
+        Dim baseIdx As Integer
+        baseIdx = KindBaseIndex(kind)
+        levelIdx = ReconcileLevel(levelIdx, baseIdx)
+
+        ApplyIndentToParagraph p, CSng(levelIdx) * indentStep, useHangingIndent, hangingPoints
+
+        i = i + 1
+
+ContinueLoop:
+        ' continue
+    Loop
+End Sub
+
+Private Sub MergeMarkerWithNextLine(ByVal pCurrent As Paragraph, ByVal pNext As Paragraph, ByVal indentStep As Single)
+    ' Merges:
+    '   (a)
+    '   (1) text...
+    ' Into:
+    '   (a)<TAB>(1) text...
+    '
+    ' Adds a left tab stop at indentStep for consistent alignment.
+
+    Dim curText As String
+    curText = StripParaEndings(pCurrent.Range.Text)
+    curText = LTrim$(curText)
+
+    Dim nextText As String
+    nextText = StripParaEndings(pNext.Range.Text)
+    nextText = LTrim$(nextText)
+
+    On Error Resume Next
+    pCurrent.Range.ParagraphFormat.TabStops.Add Position:=indentStep, Alignment:=wdAlignTabLeft
+    On Error GoTo 0
+
+    pCurrent.Range.Text = curText & vbTab & nextText & vbCr
+    pNext.Range.Delete
+End Sub
+
+Private Sub ApplyIndentToParagraph(ByVal p As Paragraph, _
+                                   ByVal leftIndentPoints As Single, _
+                                   ByVal useHangingIndent As Boolean, _
+                                   ByVal hangingPoints As Single)
+    With p.Range.ParagraphFormat
+        .LeftIndent = leftIndentPoints
+
+        If useHangingIndent Then
+            .FirstLineIndent = -Abs(hangingPoints)
+        Else
+            .FirstLineIndent = 0
+        End If
+    End With
+End Sub
+
+'========================
+' TRACK CHANGES GUARD
+'========================
+Private Function TrackChangesIsActive() As Boolean
+    ' TrackRevisions = True means Word is currently tracking edits.
+    On Error GoTo SafeFail
+    TrackChangesIsActive = ActiveDocument.TrackRevisions
+    Exit Function
+SafeFail:
+    TrackChangesIsActive = True ' fail closed
+End Function
+
+'========================
+' HELPERS
+'========================
+Private Function StripParaEndings(ByVal s As String) As String
+    Do While Len(s) > 0 And (Right$(s, 1) = vbCr Or Right$(s, 1) = vbLf)
+        s = Left$(s, Len(s) - 1)
+    Loop
+    StripParaEndings = s
+End Function
+
+Private Function IsMarkerOnlyLine(ByVal trimmedLine As String, ByVal marker As String) As Boolean
+    IsMarkerOnlyLine = (trimmedLine = marker)
+End Function
+
+Private Function GetLeadingParenMarker(ByVal s As String) As String
+    Dim re As Object, m As Object
+    Set re = CreateObject("VBScript.RegExp")
+
+    re.Global = False
+    re.IgnoreCase = False
+    re.MultiLine = False
+
+    re.Pattern = "^\(([a-z]|[A-Z]|\d+|[ivxlcdm]+)\)"
+
+    If re.Test(s) Then
+        Set m = re.Execute(s)(0)
+        GetLeadingParenMarker = "(" & m.SubMatches(0) & ")"
+    Else
+        GetLeadingParenMarker = ""
+    End If
+End Function
+
+Private Function MarkerKind(ByVal marker As String) As String
+    Dim inner As String
+    inner = Mid$(marker, 2, Len(marker) - 2)
+
+    If inner Like "[a-z]" Then
+        MarkerKind = "lower": Exit Function
+    End If
+
+    If inner Like "[A-Z]" Then
+        MarkerKind = "upper": Exit Function
+    End If
+
+    If IsAllDigits(inner) Then
+        MarkerKind = "num": Exit Function
+    End If
+
+    If IsRomanLower(inner) Then
+        MarkerKind = "roman": Exit Function
+    End If
+
+    MarkerKind = ""
+End Function
+
+Private Function KindBaseIndex(ByVal kind As String) As Integer
+    Select Case kind
+        Case "lower": KindBaseIndex = 0
+        Case "num":   KindBaseIndex = 1
+        Case "upper": KindBaseIndex = 2
+        Case "roman": KindBaseIndex = 3
+        Case Else:    KindBaseIndex = 0
+    End Select
+End Function
+
+Private Function ReconcileLevel(ByVal currentLevel As Integer, ByVal targetBase As Integer) As Integer
+    Dim curBase As Integer
+    curBase = (currentLevel Mod 4)
+
+    If ((curBase + 1) Mod 4) = targetBase Then
+        ReconcileLevel = currentLevel + 1
+        Exit Function
+    End If
+
+    If curBase = targetBase Then
+        ReconcileLevel = currentLevel
+        Exit Function
+    End If
+
+    Dim lvl As Integer
+    lvl = currentLevel
+    Do While lvl > 0 And (lvl Mod 4) <> targetBase
+        lvl = lvl - 1
+    Loop
+
+    If (lvl Mod 4) = targetBase Then
+        ReconcileLevel = lvl
+    Else
+        ReconcileLevel = targetBase
+    End If
+End Function
+
+Private Function IsAllDigits(ByVal s As String) As Boolean
+    Dim i As Long, ch As String
+    If Len(s) = 0 Then IsAllDigits = False: Exit Function
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If ch < "0" Or ch > "9" Then
+            IsAllDigits = False
+            Exit Function
+        End If
+    Next i
+    IsAllDigits = True
+End Function
+
+Private Function IsRomanLower(ByVal s As String) As Boolean
+    Dim i As Long, ch As String
+    If Len(s) = 0 Then IsRomanLower = False: Exit Function
+
+    s = LCase$(s)
+
+    For i = 1 To Len(s)
+        ch = Mid$(s, i, 1)
+        If InStr(1, "ivxlcdm", ch, vbBinaryCompare) = 0 Then
+            IsRomanLower = False
+            Exit Function
+        End If
+    Next i
+
+    IsRomanLower = True
+End Function
