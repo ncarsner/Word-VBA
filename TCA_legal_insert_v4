@@ -35,7 +35,7 @@ Public Sub Insert_TCA_With_Labels_From_TSV()
     On Error GoTo CleanFail
 
     Dim dict As Object
-    Set dict = LoadTwoColTsvDictionary(DICT_PATH)
+    Set dict = LoadTwoColTsvDictionary_Flexible(DICT_PATH)
 
     Dim i As Long
     For i = 1 To 3
@@ -44,7 +44,7 @@ Public Sub Insert_TCA_With_Labels_From_TSV()
         Dim t As String, c As String, p As String
         Dim keyTitle As String, keyChap As String, keyPart As String
 
-        ' TITLE (required)
+        ' TITLE (required; blank/cancel exits macro)
         t = PromptOrExit("Enter Title number (ESC / Cancel / blank exits):", "TCA Insert – Title")
         keyTitle = MakeTcaKey(t, "", "")
         If Not dict.Exists(keyTitle) Then
@@ -54,7 +54,7 @@ Public Sub Insert_TCA_With_Labels_From_TSV()
 
         ExitIfEsc
 
-        ' CHAPTER (required)
+        ' CHAPTER (required; blank/cancel exits macro)
         c = PromptOrExit("Enter Chapter number for Title " & t & " (ESC / Cancel / blank exits):", "TCA Insert – Chapter")
         keyChap = MakeTcaKey(t, c, "")
         If Not dict.Exists(keyChap) Then
@@ -64,7 +64,7 @@ Public Sub Insert_TCA_With_Labels_From_TSV()
 
         ExitIfEsc
 
-        ' PART (optional) — if blank/cancel, we exit macro per your instruction
+        ' PART (required in this version; blank/cancel exits macro)
         p = PromptOrExit("Enter Part number for Title " & t & ", Chapter " & c & " (ESC / Cancel / blank exits):", "TCA Insert – Part")
         keyPart = MakeTcaKey(t, c, p)
         If Not dict.Exists(keyPart) Then
@@ -74,7 +74,7 @@ Public Sub Insert_TCA_With_Labels_From_TSV()
 
         ExitIfEsc
 
-        ' INSERT (labels + dictionary values; no styles)
+        ' INSERT (no styles; label + value)
         InsertLabelAndValue "Title " & t, CStr(dict(keyTitle))
         InsertLabelAndValue "Chapter " & c, CStr(dict(keyChap))
         InsertLabelAndValue "Part " & p, CStr(dict(keyPart))
@@ -85,18 +85,14 @@ Public Sub Insert_TCA_With_Labels_From_TSV()
     Exit Sub
 
 CleanFail:
-    ' Quiet exits
-    If Err.Number = ERR_ESC Or Err.Number = ERR_USER_EXIT Then
-        Exit Sub
-    End If
-
+    If Err.Number = ERR_ESC Or Err.Number = ERR_USER_EXIT Then Exit Sub
     MsgBox "Macro stopped: " & Err.Description, vbExclamation, "Insert TCA"
 End Sub
 
 '========================
-' TSV LOADER (2 columns: Key<TAB>Value)
+' TSV LOADER (TAB preferred; whitespace fallback)
 '========================
-Private Function LoadTwoColTsvDictionary(ByVal filePath As String) As Object
+Private Function LoadTwoColTsvDictionary_Flexible(ByVal filePath As String) As Object
     ExitIfEsc
 
     Dim fso As Object, ts As Object
@@ -115,33 +111,69 @@ Private Function LoadTwoColTsvDictionary(ByVal filePath As String) As Object
     Do While Not ts.AtEndOfStream
         ExitIfEsc
 
-        Dim line As String
-        line = ts.ReadLine
-        If Len(Trim$(line)) = 0 Then GoTo ContinueLoop
-
-        Dim cols() As String
-        cols = Split(line, vbTab)
-        If UBound(cols) < 1 Then GoTo ContinueLoop
+        Dim raw As String
+        raw = ts.ReadLine
+        If Len(Trim$(raw)) = 0 Then GoTo ContinueLoop
 
         Dim k As String, v As String
-        k = Trim$(cols(0))
-        v = cols(1)
-
-        If k <> "" Then dict(k) = v
+        If TryParseKeyValue(raw, k, v) Then
+            dict(k) = v
+        End If
 
 ContinueLoop:
     Loop
 
     ts.Close
-    Set LoadTwoColTsvDictionary = dict
+    Set LoadTwoColTsvDictionary_Flexible = dict
+End Function
+
+' Returns True if parsed; False if line is unusable
+Private Function TryParseKeyValue(ByVal line As String, ByRef outKey As String, ByRef outVal As String) As Boolean
+    line = Trim$(line)
+    If line = "" Then
+        TryParseKeyValue = False
+        Exit Function
+    End If
+
+    ' 1) Prefer TAB delimiter
+    Dim tabPos As Long
+    tabPos = InStr(1, line, vbTab, vbBinaryCompare)
+    If tabPos > 0 Then
+        outKey = Trim$(Left$(line, tabPos - 1))
+        outVal = Trim$(Mid$(line, tabPos + 1))
+        TryParseKeyValue = (outKey <> "")
+        Exit Function
+    End If
+
+    ' 2) Fallback: split at first whitespace run
+    ' Find first space
+    Dim i As Long, ch As String
+    For i = 1 To Len(line)
+        ch = Mid$(line, i, 1)
+        If ch = " " Or ch = vbFormFeed Then
+            outKey = Trim$(Left$(line, i - 1))
+            outVal = Trim$(Mid$(line, i + 1))
+            TryParseKeyValue = (outKey <> "" And outVal <> "")
+            Exit Function
+        End If
+    Next i
+
+    ' No delimiter found
+    TryParseKeyValue = False
 End Function
 
 '========================
-' KEY BUILDER
+' KEY BUILDER (matches your TSV keys)
 '========================
 Private Function MakeTcaKey(ByVal t As String, ByVal c As String, ByVal p As String) As String
     t = Trim$(t): c = Trim$(c): p = Trim$(p)
-    MakeTcaKey = "TCA|T=" & t & "|C=" & c & "|P=" & p
+
+    Dim k As String
+    k = "TCA|T=" & t
+    If c <> "" Then k = k & "|C=" & c
+    If p <> "" Then k = k & "|P=" & p
+
+    MakeTcaKey = k
 End Function
 
 '========================
@@ -156,8 +188,6 @@ Private Function PromptOrExit(ByVal promptText As String, ByVal titleText As Str
     ExitIfEsc
 
     v = Trim$(v)
-
-    ' InputBox returns "" for Cancel and also for blank input
     If v = "" Then Err.Raise ERR_USER_EXIT, , "User cancelled or entered blank."
 
     PromptOrExit = v
