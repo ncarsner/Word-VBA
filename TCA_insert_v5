@@ -1,0 +1,223 @@
+Option Explicit
+
+'========================
+' USER CONFIG
+'========================
+Private Const DICT_PATH As String = "C:\Path\To\Your\TCA_Dictionary.tsv"
+
+'========================
+' WIN32: ESC KEY CHECK
+'========================
+#If VBA7 Then
+    Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#Else
+    Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#End If
+
+Private Const VK_ESCAPE As Long = 27
+
+Private Const ERR_ESC As Long = vbObjectError + 1000
+Private Const ERR_NO_FILE As Long = vbObjectError + 2000
+
+Private Function EscPressed() As Boolean
+    EscPressed = (GetAsyncKeyState(VK_ESCAPE) And &H8000) <> 0
+End Function
+
+Private Sub ExitIfEsc()
+    If EscPressed() Then Err.Raise ERR_ESC, , "ESC pressed."
+End Sub
+
+'========================
+' ENTRY POINT
+'========================
+Public Sub Insert_TCA_With_Labels_From_TSV_PartialOK()
+    On Error GoTo CleanFail
+
+    Dim dict As Object
+    Set dict = LoadTwoColTsvDictionary_Flexible(DICT_PATH)
+
+    Dim i As Long
+    For i = 1 To 3
+        ExitIfEsc
+
+        Dim t As String, c As String, p As String
+        Dim keyTitle As String, keyChap As String, keyPart As String
+
+        ' ---- TITLE (required). Blank/Cancel ends macro (nothing else to do) ----
+        t = PromptRequiredOrStop("Enter Title number (required). Blank/Cancel stops:", "TCA Insert – Title")
+        If t = "" Then Exit Sub
+
+        keyTitle = MakeTcaKey(t, "", "")
+        If Not dict.Exists(keyTitle) Then
+            MsgBox "Not found in dictionary: " & keyTitle, vbExclamation, "Validation Failed"
+            Exit Sub
+        End If
+
+        ' Insert Title immediately once validated
+        InsertLabelAndValue "Title " & t, CStr(dict(keyTitle))
+
+        ExitIfEsc
+
+        ' ---- CHAPTER (optional). Blank/Cancel stops macro but keeps Title already inserted ----
+        c = PromptOptionalOrStop("Enter Chapter number for Title " & t & " (optional). Blank/Cancel stops:", _
+                                "TCA Insert – Chapter")
+        If c = "" Then Exit Sub
+
+        keyChap = MakeTcaKey(t, c, "")
+        If Not dict.Exists(keyChap) Then
+            MsgBox "Not found in dictionary: " & keyChap, vbExclamation, "Validation Failed"
+            Exit Sub
+        End If
+
+        ' Insert Chapter immediately once validated
+        InsertLabelAndValue "Chapter " & c, CStr(dict(keyChap))
+
+        ExitIfEsc
+
+        ' ---- PART (optional). Blank/Cancel stops macro but keeps Title+Chapter already inserted ----
+        p = PromptOptionalOrStop("Enter Part number for Title " & t & ", Chapter " & c & " (optional). Blank/Cancel stops:", _
+                                "TCA Insert – Part")
+        If p = "" Then Exit Sub
+
+        keyPart = MakeTcaKey(t, c, p)
+        If Not dict.Exists(keyPart) Then
+            MsgBox "Not found in dictionary: " & keyPart, vbExclamation, "Validation Failed"
+            Exit Sub
+        End If
+
+        ' Insert Part immediately once validated
+        InsertLabelAndValue "Part " & p, CStr(dict(keyPart))
+
+        ' Spacer between portions (only if a full Title/Chapter/Part sequence completed)
+        Selection.TypeParagraph
+    Next i
+
+    Exit Sub
+
+CleanFail:
+    ' Quiet exit on ESC
+    If Err.Number = ERR_ESC Then Exit Sub
+    MsgBox "Macro stopped: " & Err.Description, vbExclamation, "Insert TCA"
+End Sub
+
+'========================
+' TSV LOADER (TAB preferred; whitespace fallback)
+'========================
+Private Function LoadTwoColTsvDictionary_Flexible(ByVal filePath As String) As Object
+    ExitIfEsc
+
+    Dim fso As Object, ts As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FileExists(filePath) Then
+        Err.Raise ERR_NO_FILE, , "TSV not found: " & filePath
+    End If
+
+    Set ts = fso.OpenTextFile(filePath, 1, False) 'ForReading=1
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    dict.CompareMode = 1 ' vbTextCompare
+
+    Do While Not ts.AtEndOfStream
+        ExitIfEsc
+
+        Dim raw As String
+        raw = ts.ReadLine
+        If Len(Trim$(raw)) = 0 Then GoTo ContinueLoop
+
+        Dim k As String, v As String
+        If TryParseKeyValue(raw, k, v) Then
+            dict(k) = v
+        End If
+
+ContinueLoop:
+    Loop
+
+    ts.Close
+    Set LoadTwoColTsvDictionary_Flexible = dict
+End Function
+
+Private Function TryParseKeyValue(ByVal line As String, ByRef outKey As String, ByRef outVal As String) As Boolean
+    line = Trim$(line)
+    If line = "" Then
+        TryParseKeyValue = False
+        Exit Function
+    End If
+
+    ' Prefer TAB delimiter
+    Dim tabPos As Long
+    tabPos = InStr(1, line, vbTab, vbBinaryCompare)
+    If tabPos > 0 Then
+        outKey = Trim$(Left$(line, tabPos - 1))
+        outVal = Trim$(Mid$(line, tabPos + 1))
+        TryParseKeyValue = (outKey <> "")
+        Exit Function
+    End If
+
+    ' Fallback: first whitespace split
+    Dim i As Long, ch As String
+    For i = 1 To Len(line)
+        ch = Mid$(line, i, 1)
+        If ch = " " Then
+            outKey = Trim$(Left$(line, i - 1))
+            outVal = Trim$(Mid$(line, i + 1))
+            TryParseKeyValue = (outKey <> "" And outVal <> "")
+            Exit Function
+        End If
+    Next i
+
+    TryParseKeyValue = False
+End Function
+
+'========================
+' KEY BUILDER
+'========================
+Private Function MakeTcaKey(ByVal t As String, ByVal c As String, ByVal p As String) As String
+    t = Trim$(t): c = Trim$(c): p = Trim$(p)
+
+    Dim k As String
+    k = "TCA|T=" & t
+    If c <> "" Then k = k & "|C=" & c
+    If p <> "" Then k = k & "|P=" & p
+
+    MakeTcaKey = k
+End Function
+
+'========================
+' PROMPTS
+'========================
+' Required: blank/cancel stops macro (returns "")
+Private Function PromptRequiredOrStop(ByVal promptText As String, ByVal titleText As String) As String
+    ExitIfEsc
+    Dim v As String
+    v = InputBox(promptText, titleText)
+    ExitIfEsc
+    v = Trim$(v)
+
+    ' InputBox returns "" for Cancel and blank input
+    PromptRequiredOrStop = v
+End Function
+
+' Optional-but-stop: blank/cancel stops macro (returns "")
+Private Function PromptOptionalOrStop(ByVal promptText As String, ByVal titleText As String) As String
+    ExitIfEsc
+    Dim v As String
+    v = InputBox(promptText, titleText)
+    ExitIfEsc
+    v = Trim$(v)
+
+    PromptOptionalOrStop = v
+End Function
+
+'========================
+' INSERT (NO STYLING)
+'========================
+Private Sub InsertLabelAndValue(ByVal labelText As String, ByVal valueText As String)
+    ExitIfEsc
+    Selection.TypeText labelText
+    Selection.TypeParagraph
+    Selection.TypeText valueText
+    Selection.TypeParagraph
+    Selection.TypeParagraph
+End Sub
