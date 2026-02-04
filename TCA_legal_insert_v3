@@ -1,0 +1,198 @@
+Option Explicit
+
+'========================
+' USER CONFIG
+'========================
+Private Const DICT_PATH As String = "C:\Path\To\Your\TCA_Dictionary.tsv"
+
+'========================
+' WIN32: ESC KEY CHECK
+'========================
+#If VBA7 Then
+    Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#Else
+    Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#End If
+
+Private Const VK_ESCAPE As Long = 27
+
+Private Function EscPressed() As Boolean
+    EscPressed = (GetAsyncKeyState(VK_ESCAPE) And &H8000) <> 0
+End Function
+
+Private Sub ExitIfEsc()
+    If EscPressed() Then Err.Raise vbObjectError + 1000, , "ESC pressed."
+End Sub
+
+'========================
+' ENTRY POINT
+'========================
+Public Sub Insert_TCA_TextOnly_From_TSV()
+    On Error GoTo CleanFail
+
+    Dim dict As Object
+    Set dict = LoadTwoColTsvDictionary(DICT_PATH)
+
+    Dim i As Long
+    For i = 1 To 3
+        ExitIfEsc
+
+        Dim t As String, c As String, p As String
+        Dim keyTitle As String, keyChap As String, keyPart As String
+
+        ' TITLE (required)
+        t = PromptValue("Portion " & i & " of 3" & vbCrLf & _
+                        "Enter Title number (required)." & vbCrLf & _
+                        "Blank or Cancel exits macro:", _
+                        "TCA Insert - Title")
+        If t = "" Then Exit Sub
+
+        keyTitle = MakeTcaKey(t, "", "")
+        If Not dict.Exists(keyTitle) Then
+            MsgBox "Not found in dictionary: " & keyTitle, vbExclamation, "Validation Failed"
+            Exit Sub
+        End If
+
+        ExitIfEsc
+
+        ' CHAPTER (optional)
+        c = PromptValue("Portion " & i & " of 3" & vbCrLf & _
+                        "Enter Chapter number for Title " & t & " (optional)." & vbCrLf & _
+                        "Blank inserts Title only:", _
+                        "TCA Insert - Chapter")
+
+        If c <> "" Then
+            keyChap = MakeTcaKey(t, c, "")
+            If Not dict.Exists(keyChap) Then
+                MsgBox "Not found in dictionary: " & keyChap, vbExclamation, "Validation Failed"
+                Exit Sub
+            End If
+        End If
+
+        ExitIfEsc
+
+        ' PART (optional)
+        p = PromptValue("Portion " & i & " of 3" & vbCrLf & _
+                        "Enter Part number for Title " & t & IIf(c <> "", ", Chapter " & c, "") & " (optional)." & vbCrLf & _
+                        "Blank skips Part:", _
+                        "TCA Insert - Part")
+
+        If p <> "" Then
+            If c = "" Then
+                MsgBox "Part provided but Chapter is blank. Enter a Chapter first, or leave Part blank.", vbExclamation, "Validation Failed"
+                Exit Sub
+            End If
+
+            keyPart = MakeTcaKey(t, c, p)
+            If Not dict.Exists(keyPart) Then
+                MsgBox "Not found in dictionary: " & keyPart, vbExclamation, "Validation Failed"
+                Exit Sub
+            End If
+        End If
+
+        ExitIfEsc
+
+        ' INSERT TEXT ONLY (no headings, no styling)
+        InsertTextOnly CStr(dict(keyTitle))
+
+        If c <> "" Then
+            InsertTextOnly CStr(dict(keyChap))
+        End If
+
+        If p <> "" Then
+            InsertTextOnly CStr(dict(keyPart))
+        End If
+
+        ' Spacer between portions
+        Selection.TypeParagraph
+
+    Next i
+
+    Exit Sub
+
+CleanFail:
+    ' Quiet exit on ESC
+    If Err.Number = vbObjectError + 1000 Then Exit Sub
+    MsgBox "Macro stopped: " & Err.Description, vbExclamation, "Insert TCA"
+End Sub
+
+'========================
+' TSV LOADER (2 columns: Key<TAB>Value)
+'========================
+Private Function LoadTwoColTsvDictionary(ByVal filePath As String) As Object
+    ExitIfEsc
+
+    Dim fso As Object, ts As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FileExists(filePath) Then
+        Err.Raise vbObjectError + 2000, , "TSV dictionary not found: " & filePath
+    End If
+
+    Set ts = fso.OpenTextFile(filePath, 1, False) 'ForReading=1
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    dict.CompareMode = 1 ' vbTextCompare
+
+    Do While Not ts.AtEndOfStream
+        ExitIfEsc
+
+        Dim line As String
+        line = ts.ReadLine
+        If Len(Trim$(line)) = 0 Then GoTo ContinueLoop
+
+        Dim cols() As String
+        cols = Split(line, vbTab)
+        If UBound(cols) < 1 Then GoTo ContinueLoop
+
+        Dim k As String, v As String
+        k = Trim$(cols(0))
+        v = cols(1) ' keep original
+
+        If k <> "" Then dict(k) = v
+
+ContinueLoop:
+    Loop
+
+    ts.Close
+    Set LoadTwoColTsvDictionary = dict
+End Function
+
+'========================
+' KEY BUILDER
+'========================
+Private Function MakeTcaKey(ByVal titleNum As String, ByVal chapNum As String, ByVal partNum As String) As String
+    titleNum = Trim$(titleNum)
+    chapNum = Trim$(chapNum)
+    partNum = Trim$(partNum)
+
+    Dim k As String
+    k = "TCA|T=" & titleNum
+
+    If chapNum <> "" Then k = k & "|C=" & chapNum
+    If partNum <> "" Then k = k & "|P=" & partNum
+
+    MakeTcaKey = k
+End Function
+
+'========================
+' PROMPT + INSERT HELPERS
+'========================
+Private Function PromptValue(ByVal promptText As String, ByVal titleText As String) As String
+    ExitIfEsc
+
+    Dim v As String
+    v = InputBox(promptText, titleText)
+
+    ExitIfEsc
+
+    ' InputBox returns "" both for Cancel and blank input (treated as exit/skip per caller)
+    PromptValue = Trim$(v)
+End Function
+
+Private Sub InsertTextOnly(ByVal s As String)
+    ExitIfEsc
+    Selection.TypeText Text:=s
+    Selection.TypeParagraph
+End Sub
