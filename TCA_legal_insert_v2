@@ -1,0 +1,213 @@
+Option Explicit
+
+'========================
+' USER CONFIG
+'========================
+Private Const DICT_PATH As String = "C:\Path\To\Your\TCA_Dictionary.tsv"
+
+'========================
+' WIN32: ESC KEY CHECK
+'========================
+#If VBA7 Then
+    Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#Else
+    Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#End If
+
+Private Const VK_ESCAPE As Long = 27
+
+Private Function EscPressed() As Boolean
+    EscPressed = (GetAsyncKeyState(VK_ESCAPE) And &H8000) <> 0
+End Function
+
+Private Sub ExitIfEsc()
+    If EscPressed() Then Err.Raise vbObjectError + 1000, , "ESC pressed."
+End Sub
+
+'========================
+' ENTRY POINT
+'========================
+Public Sub Insert_TCA_From_TSV_Dictionary_Keyed()
+    On Error GoTo CleanFail
+
+    Dim dict As Object
+    Set dict = LoadTwoColTsvDictionary(DICT_PATH)
+
+    Dim i As Long
+    For i = 1 To 3
+        ExitIfEsc
+
+        Dim t As String, c As String, p As String
+        Dim keyTitle As String, keyChap As String, keyPart As String
+
+        ' TITLE (required)
+        t = PromptValue("Portion " & i & " of 3" & vbCrLf & _
+                        "Enter Title number (required)." & vbCrLf & _
+                        "Blank or Cancel exits macro:", _
+                        "TCA Insert - Title")
+        If t = "" Then Exit Sub
+
+        keyTitle = MakeTcaKey(t, "", "")
+        If Not dict.Exists(keyTitle) Then
+            MsgBox "Not found in dictionary: " & keyTitle, vbExclamation, "Validation Failed"
+            Exit Sub
+        End If
+
+        ExitIfEsc
+
+        ' CHAPTER (optional)
+        c = PromptValue("Portion " & i & " of 3" & vbCrLf & _
+                        "Enter Chapter number for Title " & t & " (optional)." & vbCrLf & _
+                        "Blank inserts Title only:", _
+                        "TCA Insert - Chapter")
+
+        If c = "" Then
+            ' Insert Title only
+            InsertWithHeading "TCA Title " & t, CStr(dict(keyTitle)), wdStyleHeading1
+            Selection.TypeParagraph
+            Selection.TypeParagraph
+            GoTo NextPortion
+        End If
+
+        keyChap = MakeTcaKey(t, c, "")
+        If Not dict.Exists(keyChap) Then
+            MsgBox "Not found in dictionary: " & keyChap, vbExclamation, "Validation Failed"
+            Exit Sub
+        End If
+
+        ExitIfEsc
+
+        ' PART (optional)
+        p = PromptValue("Portion " & i & " of 3" & vbCrLf & _
+                        "Enter Part number for Title " & t & ", Chapter " & c & " (optional)." & vbCrLf & _
+                        "Blank inserts Title + Chapter only:", _
+                        "TCA Insert - Part")
+
+        If p <> "" Then
+            keyPart = MakeTcaKey(t, c, p)
+            If Not dict.Exists(keyPart) Then
+                MsgBox "Not found in dictionary: " & keyPart, vbExclamation, "Validation Failed"
+                Exit Sub
+            End If
+        End If
+
+        ExitIfEsc
+
+        ' INSERT: Title + Chapter, and Part if provided
+        InsertWithHeading "TCA Title " & t, CStr(dict(keyTitle)), wdStyleHeading1
+        InsertWithHeading "Chapter " & c, CStr(dict(keyChap)), wdStyleHeading2
+
+        If p <> "" Then
+            InsertWithHeading "Part " & p, CStr(dict(keyPart)), wdStyleHeading3
+        End If
+
+        Selection.TypeParagraph
+        Selection.TypeParagraph
+
+NextPortion:
+    Next i
+
+    Exit Sub
+
+CleanFail:
+    ' Quiet exit on ESC
+    If Err.Number = vbObjectError + 1000 Then Exit Sub
+    MsgBox "Macro stopped: " & Err.Description, vbExclamation, "Insert TCA"
+End Sub
+
+'========================
+' TSV LOADER (2 columns: Key<TAB>Value)
+'========================
+Private Function LoadTwoColTsvDictionary(ByVal filePath As String) As Object
+    ExitIfEsc
+
+    Dim fso As Object, ts As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FileExists(filePath) Then
+        Err.Raise vbObjectError + 2000, , "TSV dictionary not found: " & filePath
+    End If
+
+    Set ts = fso.OpenTextFile(filePath, 1, False) 'ForReading=1
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    dict.CompareMode = 1 ' vbTextCompare
+
+    Do While Not ts.AtEndOfStream
+        ExitIfEsc
+
+        Dim line As String
+        line = ts.ReadLine
+
+        If Len(Trim$(line)) = 0 Then GoTo ContinueLoop
+
+        Dim cols() As String
+        cols = Split(line, vbTab)
+
+        ' Expect at least: key + value
+        If UBound(cols) < 1 Then GoTo ContinueLoop
+
+        Dim k As String, v As String
+        k = Trim$(cols(0))
+        v = cols(1) ' keep original spacing/punctuation
+
+        If k <> "" Then
+            dict(k) = v
+        End If
+
+ContinueLoop:
+    Loop
+
+    ts.Close
+    Set LoadTwoColTsvDictionary = dict
+End Function
+
+'========================
+' KEY BUILDER
+'========================
+Private Function MakeTcaKey(ByVal titleNum As String, ByVal chapNum As String, ByVal partNum As String) As String
+    titleNum = Trim$(titleNum)
+    chapNum = Trim$(chapNum)
+    partNum = Trim$(partNum)
+
+    Dim k As String
+    k = "TCA|T=" & titleNum
+
+    If chapNum <> "" Then
+        k = k & "|C=" & chapNum
+    End If
+
+    If partNum <> "" Then
+        k = k & "|P=" & partNum
+    End If
+
+    MakeTcaKey = k
+End Function
+
+'========================
+' PROMPT + INSERT HELPERS
+'========================
+Private Function PromptValue(ByVal promptText As String, ByVal titleText As String) As String
+    ExitIfEsc
+
+    Dim v As String
+    v = InputBox(promptText, titleText)
+
+    ExitIfEsc
+
+    ' InputBox returns "" for Cancel and also for blank input.
+    PromptValue = Trim$(v)
+End Function
+
+Private Sub InsertWithHeading(ByVal headingLabel As String, ByVal bodyText As String, ByVal headingStyle As WdBuiltinStyle)
+    ExitIfEsc
+
+    Selection.Style = headingStyle
+    Selection.TypeText Text:=headingLabel
+    Selection.TypeParagraph
+
+    Selection.Style = wdStyleNormal
+    Selection.TypeText Text:=bodyText
+    Selection.TypeParagraph
+End Sub
