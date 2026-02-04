@@ -1,0 +1,121 @@
+Option Explicit
+
+Private Const PROP_NAME As String = "LEGAL_TEXT_DICTIONARY"
+Private Const DEFAULT_DICT_PATH As String = "C:\Legal\TCA_dictionary.tsv" ' adjust
+
+Public Sub ExportDictionaryToFile()
+    Dim raw As String
+    raw = GetDocProperty(PROP_NAME)
+
+    If Len(raw) = 0 Then
+        MsgBox "No dictionary found in this document property.", vbExclamation
+        Exit Sub
+    End If
+
+    Dim path As String
+    path = Application.InputBox("Export path:", "Export Dictionary", DEFAULT_DICT_PATH, Type:=2)
+    If path = "False" Then Exit Sub
+    path = Trim$(path)
+    If Len(path) = 0 Then Exit Sub
+
+    WriteAllText path, raw
+    MsgBox "Exported dictionary to:" & vbCrLf & path, vbInformation
+End Sub
+
+Public Sub ImportDictionaryFromFile()
+    Dim path As String
+    path = Application.InputBox("Import path:", "Import Dictionary", DEFAULT_DICT_PATH, Type:=2)
+    If path = "False" Then Exit Sub
+    path = Trim$(path)
+    If Len(path) = 0 Then Exit Sub
+
+    Dim raw As String
+    raw = ReadAllText(path)
+    If Len(raw) = 0 Then
+        MsgBox "File was empty or could not be read.", vbExclamation
+        Exit Sub
+    End If
+
+    ' (Optional) validate basic format: each nonblank line contains a TAB
+    If Not LooksLikeDictionary(raw) Then
+        MsgBox "File does not appear to be TAB-delimited KEY<TAB>VALUE per line.", vbExclamation
+        Exit Sub
+    End If
+
+    SetDocProperty PROP_NAME, raw
+    MsgBox "Imported dictionary into document property:" & vbCrLf & PROP_NAME, vbInformation
+End Sub
+
+Public Sub RefreshDictionaryFromFileIfPresent()
+    ' Silent refresh pattern: if file exists, import it; else do nothing
+    If FileExists(DEFAULT_DICT_PATH) Then
+        Dim raw As String
+        raw = ReadAllText(DEFAULT_DICT_PATH)
+        If Len(raw) > 0 And LooksLikeDictionary(raw) Then
+            SetDocProperty PROP_NAME, raw
+        End If
+    End If
+End Sub
+
+'========================
+' Helpers
+'========================
+Private Function LooksLikeDictionary(ByVal raw As String) As Boolean
+    Dim lines() As String, i As Long
+    lines = Split(raw, vbCrLf)
+
+    For i = LBound(lines) To UBound(lines)
+        If Len(Trim$(lines(i))) > 0 Then
+            LooksLikeDictionary = (InStr(1, lines(i), vbTab, vbBinaryCompare) > 0)
+            Exit Function
+        End If
+    Next i
+
+    LooksLikeDictionary = False
+End Function
+
+Private Function FileExists(ByVal path As String) As Boolean
+    On Error Resume Next
+    FileExists = (Len(Dir$(path, vbNormal)) > 0)
+End Function
+
+Private Sub WriteAllText(ByVal path As String, ByVal text As String)
+    Dim f As Integer
+    f = FreeFile
+    Open path For Output As #f
+    Print #f, text
+    Close #f
+End Sub
+
+Private Function ReadAllText(ByVal path As String) As String
+    On Error GoTo EH
+    Dim f As Integer, s As String
+    f = FreeFile
+    Open path For Input As #f
+    s = Input$(LOF(f), #f)
+    Close #f
+    ReadAllText = s
+    Exit Function
+EH:
+    ReadAllText = vbNullString
+End Function
+
+Private Function GetDocProperty(ByVal propName As String) As String
+    On Error GoTo EH
+    GetDocProperty = CStr(ActiveDocument.CustomDocumentProperties(propName).Value)
+    Exit Function
+EH:
+    GetDocProperty = vbNullString
+End Function
+
+Private Sub SetDocProperty(ByVal propName As String, ByVal propValue As String)
+    On Error GoTo AddNew
+    ActiveDocument.CustomDocumentProperties(propName).Value = propValue
+    Exit Sub
+AddNew:
+    Err.Clear
+    ActiveDocument.CustomDocumentProperties.Add _
+        Name:=propName, LinkToContent:=False, _
+        Type:=msoPropertyTypeString, Value:=propValue
+End Sub
+
