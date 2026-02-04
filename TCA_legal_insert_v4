@@ -1,0 +1,175 @@
+Option Explicit
+
+'========================
+' USER CONFIG
+'========================
+Private Const DICT_PATH As String = "C:\Path\To\Your\TCA_Dictionary.tsv"
+
+'========================
+' WIN32: ESC KEY CHECK
+'========================
+#If VBA7 Then
+    Private Declare PtrSafe Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#Else
+    Private Declare Function GetAsyncKeyState Lib "user32" (ByVal vKey As Long) As Integer
+#End If
+
+Private Const VK_ESCAPE As Long = 27
+
+Private Function EscPressed() As Boolean
+    EscPressed = (GetAsyncKeyState(VK_ESCAPE) And &H8000) <> 0
+End Function
+
+Private Sub ExitIfEsc()
+    If EscPressed() Then Err.Raise vbObjectError + 1000, , "ESC pressed."
+End Sub
+
+'========================
+' ENTRY POINT
+'========================
+Public Sub Insert_TCA_With_Labels_From_TSV()
+    On Error GoTo CleanFail
+
+    Dim dict As Object
+    Set dict = LoadTwoColTsvDictionary(DICT_PATH)
+
+    Dim i As Long
+    For i = 1 To 3
+        ExitIfEsc
+
+        Dim t As String, c As String, p As String
+        Dim keyTitle As String, keyChap As String, keyPart As String
+
+        ' ---------- TITLE (required) ----------
+        t = PromptRequired("Enter Title number (ESC / Cancel exits):", "TCA Insert – Title")
+        keyTitle = MakeTcaKey(t, "", "")
+        If Not dict.Exists(keyTitle) Then
+            MsgBox "Not found in dictionary: " & keyTitle, vbExclamation
+            Exit Sub
+        End If
+
+        ExitIfEsc
+
+        ' ---------- CHAPTER (required) ----------
+        c = PromptRequired("Enter Chapter number for Title " & t & " (ESC / Cancel exits):", _
+                           "TCA Insert – Chapter")
+        keyChap = MakeTcaKey(t, c, "")
+        If Not dict.Exists(keyChap) Then
+            MsgBox "Not found in dictionary: " & keyChap, vbExclamation
+            Exit Sub
+        End If
+
+        ExitIfEsc
+
+        ' ---------- PART (optional, but blank exits loop entirely) ----------
+        p = PromptOptional("Enter Part number for Title " & t & ", Chapter " & c & _
+                           " (blank or Cancel exits):", _
+                           "TCA Insert – Part")
+        If p <> "" Then
+            keyPart = MakeTcaKey(t, c, p)
+            If Not dict.Exists(keyPart) Then
+                MsgBox "Not found in dictionary: " & keyPart, vbExclamation
+                Exit Sub
+            End If
+        End If
+
+        ExitIfEsc
+
+        ' ---------- INSERT ----------
+        InsertLabelAndValue "Title " & t, dict(keyTitle)
+        InsertLabelAndValue "Chapter " & c, dict(keyChap)
+
+        If p <> "" Then
+            InsertLabelAndValue "Part " & p, dict(keyPart)
+        End If
+
+        Selection.TypeParagraph ' single spacer between portions
+    Next i
+
+    Exit Sub
+
+CleanFail:
+    ' Silent exit on ESC
+    If Err.Number = vbObjectError + 1000 Then Exit Sub
+    MsgBox "Macro stopped: " & Err.Description, vbExclamation
+End Sub
+
+'========================
+' TSV LOADER
+'========================
+Private Function LoadTwoColTsvDictionary(ByVal filePath As String) As Object
+    ExitIfEsc
+
+    Dim fso As Object, ts As Object
+    Set fso = CreateObject("Scripting.FileSystemObject")
+
+    If Not fso.FileExists(filePath) Then
+        Err.Raise vbObjectError + 2000, , "TSV not found: " & filePath
+    End If
+
+    Set ts = fso.OpenTextFile(filePath, 1, False)
+
+    Dim dict As Object
+    Set dict = CreateObject("Scripting.Dictionary")
+    dict.CompareMode = 1
+
+    Do While Not ts.AtEndOfStream
+        ExitIfEsc
+
+        Dim line As String, cols() As String
+        line = Trim$(ts.ReadLine)
+        If line = "" Then GoTo ContinueLoop
+
+        cols = Split(line, vbTab)
+        If UBound(cols) < 1 Then GoTo ContinueLoop
+
+        dict(Trim$(cols(0))) = cols(1)
+
+ContinueLoop:
+    Loop
+
+    ts.Close
+    Set LoadTwoColTsvDictionary = dict
+End Function
+
+'========================
+' KEY BUILDER
+'========================
+Private Function MakeTcaKey(ByVal t As String, ByVal c As String, ByVal p As String) As String
+    MakeTcaKey = "TCA|T=" & t & _
+                 IIf(c <> "", "|C=" & c, "") & _
+                 IIf(p <> "", "|P=" & p, "")
+End Function
+
+'========================
+' PROMPTS (EXIT-SAFE)
+'========================
+Private Function PromptRequired(ByVal msg As String, ByVal title As String) As String
+    ExitIfEsc
+    Dim v As String
+    v = Trim$(InputBox(msg, title))
+    ExitIfEsc
+    If v = "" Then Exit Sub
+    PromptRequired = v
+End Function
+
+Private Function PromptOptional(ByVal msg As String, ByVal title As String) As String
+    ExitIfEsc
+    Dim v As String
+    v = Trim$(InputBox(msg, title))
+    ExitIfEsc
+    If v = "" Then Exit Sub
+    PromptOptional = v
+End Function
+
+'========================
+' INSERT (NO STYLING)
+'========================
+Private Sub InsertLabelAndValue(ByVal labelText As String, ByVal valueText As String)
+    ExitIfEsc
+    Selection.TypeText labelText
+    Selection.TypeParagraph
+    Selection.TypeText valueText
+    Selection.TypeParagraph
+    Selection.TypeParagraph
+End Sub
